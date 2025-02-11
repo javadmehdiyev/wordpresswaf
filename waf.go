@@ -30,6 +30,9 @@ var sqlInjectionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(;[\s\+]*?shutdown|;[\s\+]*?drop|--[\s\+]*?|#[\s\+]*?|\/\*(!)?|\*\/)`),
 	regexp.MustCompile(`(?i)(cast[\s\+]*?\(|convert[\s\+]*?\(|declare[\s\+]*?@|varchar[\s\+]*?\()`),
 	regexp.MustCompile(`(?i)(select.*?case.*?when|select.*?if[\s\+]*?\(|select.*?char[\s\+]*?\()`),
+	// Daha az katı kurallar
+	regexp.MustCompile(`(?i)(select\s+\*\s+from)`),
+	regexp.MustCompile(`(?i)(or\s+1=1)`),
 }
 
 // XSS regex patterns
