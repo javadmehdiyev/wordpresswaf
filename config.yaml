@@ -19,7 +19,7 @@ proxy:
 
 security:
   rate_limit:
-    requests: 100
+    requests: 1000
     per_seconds: 60
   max_request_size_bytes: 10485760  # 10MB
   blocked_ips: []
@@ -48,7 +48,7 @@ rules:
     max_url_length: 2048
     max_header_length: 8192
     max_cookie_length: 4096
-    allowed_http_methods: ["GET", "POST", "HEAD"]
+    allowed_http_methods: ["GET", "POST", "HEAD", "PUT", "DELETE", "OPTIONS"]
     blocked_file_extensions: [
       ".php",
       ".phtml",
@@ -67,12 +67,19 @@ rules:
       "wp-cron.php",
       "xmlrpc.php",
       "wp-comments-post.php",
-      "wp-config.php"
+      "wp-config.php",
+      "wp-load.php",
+      "wp-mail.php",
+      "wp-settings.php",
+      "wp-signup.php",
+      "wp-trackback.php",
+      "wp-blog-header.php",
+      "wp-links-opml.php"
     ]
   
 logging:
-  level: "info"  # debug, info, warn, error
-  file: "waf.log"
+  level: "info"
+  file: "/var/log/waf/waf.log"
   format: "json"
   max_size: 100    # MB
   max_backups: 3

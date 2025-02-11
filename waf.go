@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -23,52 +24,38 @@ var (
 	ipCache *cache.Cache
 )
 
-// SQL Injection regex patterns
+// SQL Injection regex patterns - Sadece gerçek saldırıları yakala
 var sqlInjectionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(union[\s\+]+select|select.+from|insert[\s\+]+into|delete[\s\+]+from|drop[\s\+]+table|drop[\s\+]+database|truncate[\s\+]+table|update[\s\+]+set)`),
-	regexp.MustCompile(`(?i)(exec[\s\+]+xp_|exec[\s\+]+sp_|waitfor[\s\+]+delay|benchmark[\s\+]*?\()`),
-	regexp.MustCompile(`(?i)(;[\s\+]*?shutdown|;[\s\+]*?drop|--[\s\+]*?|#[\s\+]*?|\/\*(!)?|\*\/)`),
-	regexp.MustCompile(`(?i)(cast[\s\+]*?\(|convert[\s\+]*?\(|declare[\s\+]*?@|varchar[\s\+]*?\()`),
-	regexp.MustCompile(`(?i)(select.*?case.*?when|select.*?if[\s\+]*?\(|select.*?char[\s\+]*?\()`),
-	// Daha az katı kurallar
-	regexp.MustCompile(`(?i)(select\s+\*\s+from)`),
-	regexp.MustCompile(`(?i)(or\s+1=1)`),
+	regexp.MustCompile(`(?i)(union[\s\+]+select.+from|information_schema|sysdatabases|sysusers)`),
+	regexp.MustCompile(`(?i)(drop[\s\+]+table|drop[\s\+]+database|truncate[\s\+]+table)`),
+	regexp.MustCompile(`(?i)(exec[\s\+]+xp_|exec[\s\+]+sp_|waitfor[\s\+]+delay)`),
+	regexp.MustCompile(`(?i)(';[\s\+]*?shutdown|';[\s\+]*?drop|--[\s\+]*?|\/\*!)`),
 }
 
-// XSS regex patterns
+// XSS regex patterns - Sadece tehlikeli olanları yakala
 var xssPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(<script[^>]*>[\s\S]*?<\/script>)`),
-	regexp.MustCompile(`(?i)(javascript:|vbscript:|expression[\s\+]*?\(|applet[\s\+]*?|meta[\s\+]*?|xml[\s\+]*?|blink[\s\+]*?|link[\s\+]*?|style[\s\+]*?|embed[\s\+]*?|object[\s\+]*?|iframe[\s\+]*?|frame[\s\+]*?|frameset[\s\+]*?|ilayer[\s\+]*?|layer[\s\+]*?|bgsound[\s\+]*?|base[\s\+]*?)`),
-	regexp.MustCompile(`(?i)(onabort|onactivate|onafterprint|onafterupdate|onbeforeactivate|onbeforecopy|onbeforecut|onbeforedeactivate|onbeforeeditfocus|onbeforepaste|onbeforeprint|onbeforeunload|onbeforeupdate|onblur|onbounce|oncellchange|onchange|onclick|oncontextmenu|oncontrolselect|oncopy|oncut|ondataavailable|ondatasetchanged|ondatasetcomplete|ondblclick|ondeactivate|ondrag|ondragend|ondragenter|ondragleave|ondragover|ondragstart|ondrop|onerror|onerrorupdate|onfilterchange|onfinish|onfocus|onfocusin|onfocusout|onhelp|onkeydown|onkeypress|onkeyup|onlayoutcomplete|onload|onlosecapture|onmousedown|onmouseenter|onmouseleave|onmousemove|onmouseout|onmouseover|onmouseup|onmousewheel|onmove|onmoveend|onmovestart|onpaste|onpropertychange|onreadystatechange|onreset|onresize|onresizeend|onresizestart|onrowenter|onrowexit|onrowsdelete|onrowsinserted|onscroll|onselect|onselectionchange|onselectstart|onstart|onstop|onsubmit|onunload)`),
-	regexp.MustCompile(`(?i)(alert|confirm|prompt|eval|execscript|expression|msgbox|refresh|url|void|window\.|\[|\])`),
+	regexp.MustCompile(`(?i)(<script.*?>[^<]*?(alert|eval|function|onclick).*?<\/script>)`),
+	regexp.MustCompile(`(?i)(javascript:.*?(alert|eval|function|onclick))`),
+	regexp.MustCompile(`(?i)(<img.*?onerror.*?=.*?(alert|eval|function).*?>)`),
 }
 
-// Path Traversal regex patterns
+// Path Traversal regex patterns - Sadece gerçek saldırıları yakala
 var pathTraversalPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(\.\.\/|\.\.\\|%2e%2e%2f|%252e%252e%252f|%c0%ae%c0%ae%c0%af|%uff0e%uff0e%u2215|%uff0e%uff0e%u2216)`),
-	regexp.MustCompile(`(?i)((\/|\\)(etc|usr|home|var|root|windows|system|system32|boot|proc))`),
-	regexp.MustCompile(`(?i)(\.htaccess|passwd|shadow|master\.mdf|web\.config)`),
+	regexp.MustCompile(`(?i)(\.\./\.\./\.\./|\.\.\\\.\.\\\.\.\\)`),
+	regexp.MustCompile(`(?i)(/etc/passwd|/etc/shadow|c:\/windows\/system32)`),
 }
 
-// WordPress specific attack patterns
+// WordPress specific attack patterns - Normal WordPress yollarını engelleme
 var wordpressPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(wp-config\.php|wp-admin|wp-login\.php|xmlrpc\.php|wp-content\/plugins\/|wp-content\/themes\/)`),
-	regexp.MustCompile(`(?i)(eval-stdin\.php|wp-load\.php|wp-settings\.php|wp-cron\.php|wp-blog-header\.php)`),
-	regexp.MustCompile(`(?i)(wp-json\/|wp\/v2\/|akismet\/|wordfence\/|yoast\/)`),
+	regexp.MustCompile(`(?i)(wp-config\.php$|eval-stdin\.php)`),
+	regexp.MustCompile(`(?i)(wp-content/plugins/.*?/\.\./)`),
+	regexp.MustCompile(`(?i)(wp-content/themes/.*?/\.\./)`),
 }
 
-// Shell command injection patterns
+// Shell command injection patterns - Sadece tehlikeli komutları yakala
 var shellInjectionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)([;&\|` + "`" + `][\s]*?(ping|nslookup|traceroute|wget|curl|nc|netcat|bash|sh|python|perl|ruby|php|nmap))`),
-	regexp.MustCompile(`(?i)(system|exec|shell_exec|passthru|eval|assert|str_rot13|base64_decode)`),
-}
-
-// File upload patterns
-var fileUploadPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\.(php|phtml|php3|php4|php5|php7|pht|phar|inc)$`),
-	regexp.MustCompile(`(?i)\.(asp|aspx|config|ashx|asmx|aspq|axd|cshtm|cshtml|rem|soap|vbhtm|vbhtml|asa|cer|shtml)$`),
-	regexp.MustCompile(`(?i)\.(jsp|jspx|jsw|jsv|jspf|wss|do|action)$`),
-	regexp.MustCompile(`(?i)\.(cfm|cfml|cfc|dbm)$`),
+	regexp.MustCompile(`(?i)([;&\|][\s]*?(ping -i|killall|wget|curl.*?eval|nc -e|netcat -e|bash -i))`),
+	regexp.MustCompile(`(?i)(system\s*\(|exec\s*\(|shell_exec\s*\(|passthru\s*\()`),
 }
 
 type WAF struct {
@@ -79,6 +66,14 @@ type WAF struct {
 func init() {
 	log = logrus.New()
 	log.SetFormatter(&logrus.JSONFormatter{})
+
+	// Log dosyasını ayarla
+	logFile, err := os.OpenFile("/var/log/waf/waf.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		panic(fmt.Sprintf("Log dosyası açılamadı: %v", err))
+	}
+	log.SetOutput(logFile)
+
 	ipCache = cache.New(5*time.Minute, 10*time.Minute)
 }
 
@@ -99,6 +94,26 @@ func NewWAF() (*WAF, error) {
 }
 
 func (w *WAF) checkRequest(c *gin.Context) (bool, string, string) {
+	// WordPress admin ve login sayfalarını kontrol etme
+	if strings.Contains(c.Request.URL.Path, "/wp-admin") ||
+		strings.Contains(c.Request.URL.Path, "/wp-login.php") {
+		return false, "", ""
+	}
+
+	// Static dosyaları kontrol etme
+	if strings.HasSuffix(c.Request.URL.Path, ".css") ||
+		strings.HasSuffix(c.Request.URL.Path, ".js") ||
+		strings.HasSuffix(c.Request.URL.Path, ".png") ||
+		strings.HasSuffix(c.Request.URL.Path, ".jpg") ||
+		strings.HasSuffix(c.Request.URL.Path, ".jpeg") ||
+		strings.HasSuffix(c.Request.URL.Path, ".gif") ||
+		strings.HasSuffix(c.Request.URL.Path, ".svg") ||
+		strings.HasSuffix(c.Request.URL.Path, ".woff") ||
+		strings.HasSuffix(c.Request.URL.Path, ".woff2") ||
+		strings.HasSuffix(c.Request.URL.Path, ".ttf") {
+		return false, "", ""
+	}
+
 	// Original URI'yi al
 	originalURI := c.GetHeader("X-Original-URI")
 	if originalURI == "" {
@@ -107,67 +122,36 @@ func (w *WAF) checkRequest(c *gin.Context) (bool, string, string) {
 
 	// Request body'sini oku
 	var bodyBytes []byte
-	if c.Request.Body != nil {
+	if c.Request.Body != nil && c.Request.Method == "POST" {
 		bodyBytes, _ = ioutil.ReadAll(c.Request.Body)
-		// Body'i geri yükle
 		c.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
 	}
 
-	// Tüm payload'ları birleştir
-	payload := fmt.Sprintf("%s %s %s %s %s",
+	// Payload'ı birleştir
+	payload := fmt.Sprintf("%s %s %s",
 		originalURI,
-		c.Request.Method,
-		c.Request.UserAgent(),
 		string(bodyBytes),
 		c.Request.Referer(),
 	)
 
-	// Headers'ı ekle
-	for key, values := range c.Request.Header {
-		payload += " " + key + ": " + strings.Join(values, " ")
-	}
-
 	// Payload'ı decode et
 	decodedPayload := w.decodePayload(payload)
 
-	// SQL Injection kontrolü
+	// Saldırı kontrolleri
 	if found, pattern := w.checkPayload(sqlInjectionPatterns, decodedPayload); found {
 		return true, "SQL Injection", pattern
 	}
 
-	// XSS kontrolü
 	if found, pattern := w.checkPayload(xssPatterns, decodedPayload); found {
 		return true, "XSS", pattern
 	}
 
-	// Path Traversal kontrolü
 	if found, pattern := w.checkPayload(pathTraversalPatterns, decodedPayload); found {
 		return true, "Path Traversal", pattern
 	}
 
-	// Shell injection kontrolü
 	if found, pattern := w.checkPayload(shellInjectionPatterns, decodedPayload); found {
 		return true, "Shell Injection", pattern
-	}
-
-	// File upload kontrolü
-	if c.Request.Method == "POST" && c.Request.Header.Get("Content-Type") != "" {
-		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-			if found, pattern := w.checkPayload(fileUploadPatterns, decodedPayload); found {
-				return true, "Malicious File Upload", pattern
-			}
-		}
-	}
-
-	// WordPress specific kontroller
-	if found, pattern := w.checkPayload(wordpressPatterns, decodedPayload); found {
-		// WordPress endpoint'lerini sadece logla
-		log.WithFields(logrus.Fields{
-			"ip":      c.ClientIP(),
-			"type":    "WordPress Endpoint",
-			"pattern": pattern,
-			"url":     originalURI,
-		}).Info("WordPress endpoint erişimi")
 	}
 
 	return false, "", ""
