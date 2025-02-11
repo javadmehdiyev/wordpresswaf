@@ -1,0 +1,89 @@
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+  max_header_bytes: 1048576  # 1MB
+
+proxy:
+  target: "unix:/var/run/php/php-fpm.sock"  # PHP-FPM socket
+  document_root: "/var/www/html/wordpress/public_html"  # WordPress root dizini
+  timeout: 30s
+  max_idle_conns: 100
+  idle_timeout: 90s
+  php_handler:
+    enabled: true
+    locations: ["~ \\.php$"]
+    fastcgi_params:
+      SCRIPT_FILENAME: "/var/www/html/wordpress/public_html$fastcgi_script_name"
+      DOCUMENT_ROOT: "/var/www/html/wordpress/public_html"
+
+security:
+  rate_limit:
+    requests: 100
+    per_seconds: 60
+  max_request_size_bytes: 10485760  # 10MB
+  blocked_ips: []
+  whitelist_ips: []
+  blocked_user_agents: [
+    "(?i)sqlmap",
+    "(?i)nikto",
+    "(?i)nmap",
+    "(?i)masscan",
+    "(?i)zmeu",
+    "(?i)dirbuster",
+    "(?i)gobuster",
+    "(?i)wpscan",
+    "(?i)hydra"
+  ]
+  blocked_countries: []  # ISO country codes: US, CN, RU, etc.
+
+rules:
+  sql_injection: true
+  xss: true
+  path_traversal: true
+  wordpress_specific: true
+  shell_injection: true
+  file_upload: true
+  request_validation:
+    max_url_length: 2048
+    max_header_length: 8192
+    max_cookie_length: 4096
+    allowed_http_methods: ["GET", "POST", "HEAD"]
+    blocked_file_extensions: [
+      ".php",
+      ".phtml",
+      ".php3",
+      ".php4",
+      ".php5",
+      ".php7",
+      ".pht",
+      ".phar",
+      ".inc"
+    ]
+    allowed_php_files: [
+      "index.php",
+      "wp-login.php",
+      "wp-admin.php",
+      "wp-cron.php",
+      "xmlrpc.php",
+      "wp-comments-post.php",
+      "wp-config.php"
+    ]
+  
+logging:
+  level: "info"  # debug, info, warn, error
+  file: "waf.log"
+  format: "json"
+  max_size: 100    # MB
+  max_backups: 3
+  max_age: 28      # days
+  compress: true
+  include_request_body: false
+  mask_sensitive_data: true
+  sensitive_fields: [
+    "password",
+    "token",
+    "api_key",
+    "credit_card",
+    "auth"
+  ] 
